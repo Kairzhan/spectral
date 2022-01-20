@@ -9,3 +9,10 @@ make
 ```
 
 The CUDA version of the code is available under `src/cuda`.
+
+`utils` directory contains Python script for postprocessing. Example usage of this script:
+```
+python3 ./process.py -n 64 -s 100 -e 2000 -i 25 -m 1 1 1
+```
+This script should be invoked from the directory which contains `uuu*` `vvv*` `www*` files. In previous example it is explicitly defined that
+mesh resolution is `64`, output is started at timestep `100` and ends at `2000`, output frequency is `25`. More parameters can be found by investigating the script source.
