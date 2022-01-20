@@ -1,0 +1,519 @@
+! This program is free software: you can redistribute it and/or modify it under the
+! terms of the GNU General Public License as published by the Free Software
+! Foundation, either version 3 of the License, or (at your option) any later version.
+!
+! This program is distributed in the hope that it will be useful, but WITHOUT ANY
+! WARRANTY; without even the implied warranty of MERCHANTABILITY or
+! FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+! more details.
+!
+! You should have received a copy of the GNU General Public License along with
+! this program. If not, see <https://www.gnu.org/licenses/>. 
+program main
+  use cufft
+  implicit none
+  ! Host data
+  real(c_float), allocatable, dimension(:, :, :) :: uxh, uyh, uzh
+  real(c_float), allocatable, dimension(:, :, :) :: uxh2, uyh2, uzh2
+  real(c_float), allocatable, dimension(:, :, :) :: uxh3, uyh3, uzh3
+  real(c_float), allocatable, dimension(:, :, :) :: kxh, kyh, kzh, k2h, k2invh, kabsh
+  integer(c_int), allocatable, dimension(:, :, :) :: ik2h
+  
+  ! Device data for real input
+  real(c_float), device, allocatable, dimension(:, :, :) :: ux, uy, uz
+  real(c_float), device, allocatable, dimension(:, :, :) :: vortx, vorty, vortz
+  real(c_float), device, allocatable, dimension(:, :, :) :: velvortx, velvorty, velvortz
+
+  ! Device data for complex output
+  complex(c_float_complex), device, allocatable, dimension(:, :, :) :: ux_hat, uy_hat, uz_hat
+  complex(C_float_COMPLEX), device, allocatable, dimension(:, :, :) :: ux_hat2, uy_hat2, uz_hat2
+  complex(C_float_COMPLEX), device, allocatable, dimension(:, :, :) :: vortx_hat, vorty_hat, vortz_hat
+  complex(C_float_COMPLEX), device, allocatable, dimension(:, :, :) :: velvortx_hat, velvorty_hat, velvortz_hat
+  complex(C_float_COMPLEX), device, allocatable, dimension(:, :, :) :: rhsx, rhsy, rhsz, rhsx0, rhsy0, rhsz0
+  real(c_float), device, allocatable, dimension(:, :, :) :: kx, ky, kz, k2, k2inv, kabs
+  integer(c_int), device, allocatable, dimension(:, :, :) :: ik2
+  real(c_float) :: start, end
+
+  integer, parameter :: nhp1=nx/2+1
+  integer, parameter :: nxnynz=nx*ny*nz
+  integer, parameter :: noutput=50, nenergy=20, ndump=25
+  integer :: plan, planinv
+  integer :: status
+  integer :: i, j, k
+  integer, parameter :: n=nx
+  real(c_float) :: l
+  real(c_float) :: pi
+  real(c_float) :: dx, dy, dz
+  real(c_float) :: rhsxtemp
+
+  real(c_float), parameter :: visc = 1/300.
+  integer, parameter :: nsteps=100
+  real(c_float), parameter :: dt=0.005
+  real(c_float), parameter :: klimit=nx/3.
+  real(c_float) :: energy
+  integer :: istep
+  
+  pi=4.0*atan(1.0)
+  l=pi*2
+  dx=l/nx
+  dy=l/ny
+  dz=l/nz
+
+  ! Allocate host arrays
+  allocate(uxh(nx, ny, nz))
+  allocate(uyh(nx, ny, nz))
+  allocate(uzh(nx, ny, nz))
+  allocate(uxh2(nx, ny, nz))
+  allocate(uyh2(nx, ny, nz))
+  allocate(uzh2(nx, ny, nz))
+  allocate(uxh3(nx, ny, nz))
+  allocate(uyh3(nx, ny, nz))
+  allocate(uzh3(nx, ny, nz))
+
+  allocate(kxh(nx/2+1, ny, nz))
+  allocate(kyh(nx/2+1, ny, nz))
+  allocate(kzh(nx/2+1, ny, nz))
+  allocate(k2h(nx/2+1, ny, nz))
+  allocate(k2invh(nx/2+1, ny, nz))
+  allocate(kabsh(nhp1, ny, nz))
+  
+  ! Real arrays in device
+  allocate(ux(nx, ny, nz))
+  allocate(uy(nx, ny, nz))
+  allocate(uz(nx, ny, nz))
+
+  allocate(vortx(nx, ny, nz))
+  allocate(vorty(nx, ny, nz))
+  allocate(vortz(nx, ny, nz))
+
+  allocate(velvortx(nx, ny, nz))
+  allocate(velvorty(nx, ny, nz))
+  allocate(velvortz(nx, ny, nz))
+
+  ! Spectral arrays in device
+  allocate(ux_hat(nx/2+1, ny, nz))
+  allocate(uy_hat(nx/2+1, ny, nz))
+  allocate(uz_hat(nx/2+1, ny, nz))
+  allocate(ux_hat2(nx/2+1, ny, nz))
+  allocate(uy_hat2(nx/2+1, ny, nz))
+  allocate(uz_hat2(nx/2+1, ny, nz))
+
+  allocate(vortx_hat(nx/2+1, ny, nz))
+  allocate(vorty_hat(nx/2+1, ny, nz))
+  allocate(vortz_hat(nx/2+1, ny, nz))
+
+  allocate(velvortx_hat(nx/2+1, ny, nz))
+  allocate(velvorty_hat(nx/2+1, ny, nz))
+  allocate(velvortz_hat(nx/2+1, ny, nz))
+
+  allocate(rhsx(nx/2+1, ny, nz))
+  allocate(rhsy(nx/2+1, ny, nz))
+  allocate(rhsz(nx/2+1, ny, nz))
+
+  allocate(rhsx0(nx/2+1, ny, nz))
+  allocate(rhsy0(nx/2+1, ny, nz))
+  allocate(rhsz0(nx/2+1, ny, nz))
+
+  allocate(kx(nx/2+1, ny, nz))
+  allocate(ky(nx/2+1, ny, nz))
+  allocate(kz(nx/2+1, ny, nz))
+  allocate(k2(nx/2+1, ny, nz))
+  allocate(k2inv(nx/2+1, ny, nz))
+  allocate(kabs(nx/2+1, ny, nz))
+
+  if (cufftPlan3d(plan, nx, ny, nz, CUFFT_R2C)/=CUFFT_SUCCESS) then
+     print *, "ERROR: cufft plan error 1."
+  endif
+  
+  if (cufftPlan3d(planinv, nx, ny, nz, CUFFT_C2R)/=CUFFT_SUCCESS) then
+     print *, "ERROR: cufft plan error 1."
+  endif
+  
+  ! Compute wavenumbers in host memory
+  do i=1, nhp1
+     if (i<=nx/2) then
+        kxh(i, :, :)=i-1
+     else
+        kxh(i, :, :)=-n+i-1
+     endif
+  enddo
+
+  do j=1, n
+     if (j<=n/2) then
+        kyh(:, j, :)=(j-1)
+     else
+        kyh(:, j, :)=(-n+j-1)
+     endif
+  enddo
+
+  do k=1, n
+     if (k<=n/2) then
+        kzh(:, :, k)=(k-1)
+     else
+        kzh(:, :, k)=(-n+k-1)
+     endif
+  enddo
+
+  ! k2, kinv and others
+  do k=1, n
+     do j=1, n
+        do i=1, nhp1
+           k2h(i,j,k)=kxh(i,j,k)**2+kyh(i,j,k)**2+kzh(i,j,k)**2
+           kabsh(i,j,k)=sqrt(k2h(i,j,k))           
+           if (k2h(i,j,k)/=0) then
+              k2invh(i,j,k)=1./k2h(i,j,k)
+           else
+              k2invh(i,j,k)=1.
+           endif
+        enddo
+     enddo
+  enddo
+
+  ik2h = int ( sqrt(k2h) + 0.5 )
+
+  ! Initialize velocity field
+  do k=1, n
+     do j=1, n
+        do i=1, n
+           uxh(i,j,k) = sin((i-0.5)*dx)*cos((j-0.5)*dy)*cos((k-0.5)*dz)
+           uyh(i,j,k) = -cos((i-0.5)*dx)*sin((j-0.5)*dy)*cos((k-0.5)*dz)
+           uzh(i,j,k) = 0
+        enddo
+     enddo
+  enddo
+  ! Analytical initial vorticity
+  do k=1, n
+     do j=1, n
+        do i=1, n
+           uxh3(i,j,k) = -cos((i-0.5)*dx)*sin((j-0.5)*dy)*sin((k-0.5)*dz)
+           uyh3(i,j,k) = -sin((i-0.5)*dx)*cos((j-0.5)*dy)*sin((k-0.5)*dz)
+           uzh3(i,j,k) = sin((i-0.5)*dx)*sin((j-0.5)*dy)*cos((k-0.5)*dz)+sin((i-0.5)*dx)*sin((j-0.5)*dy)*cos((k-0.5)*dz)
+        enddo
+     enddo
+  enddo
+
+  ! Copy to device
+  ux=uxh
+  uy=uyh
+  uz=uzh
+
+  kx=kxh
+  ky=kyh
+  kz=kzh
+  k2=k2h
+  k2inv=k2invh
+  kabs=kabsh
+  ik2=ik2h
+
+  uxh2=uxh
+  uyh2=uyh
+  uzh2=uzh
+  
+  ! Let's first test CUDAFFT
+  status=cufftExecR2C(plan, ux, ux_hat)
+  print *, "Exec stat:", status
+  status=cufftExecR2C(plan, uy, uy_hat)
+  print *, "Exec stat:", status
+  status=cufftExecR2C(plan, uz, uz_hat)
+  print *, "Exec stat:", status
+
+  !$cuf kernel do(3) <<< (*,*), (32,4) >>>
+  do k=1,  nz
+     do j=1, ny
+        do i=1, nhp1
+           ux_hat(i,j,k)=ux_hat(i,j,k)/nxnynz
+           uy_hat(i,j,k)=uy_hat(i,j,k)/nxnynz
+           uz_hat(i,j,k)=uz_hat(i,j,k)/nxnynz
+        enddo
+     enddo
+  enddo
+
+  !------------------------------------------------------------
+  ! Main time loop
+  !------------------------------------------------------------
+  call cpu_time(start)
+  
+  do istep=1, nsteps
+     if (mod(istep, 100)==0) then
+        write(*,"(I7,1X,1pe14.6)") istep, istep*dt
+     endif
+
+     ! Get the latest velocity
+     ux_hat2=ux_hat
+     uy_hat2=uy_hat
+     uz_hat2=uz_hat
+     status=cufftExecC2R(planinv, ux_hat2, ux)
+     status=cufftExecC2R(planinv, uy_hat2, uy)
+     status=cufftExecC2R(planinv, uz_hat2, uz)
+
+     ! Save output and ...
+     if (mod(istep, noutput)==0) then
+        write(*,"(I7,1X,1pe14.6)") istep, istep*dt
+        uxh=ux
+        uyh=uy
+        uzh=uz
+
+        call output_fstep(nx, ny, nz, uxh, uyh, uzh, istep)
+     endif
+
+     if (mod(istep, ndump)==0) then
+        uxh=ux
+        uyh=uy
+        uzh=uz
+
+        call dump_fstep(nx, ny, nz, uxh, uyh, uzh, istep)
+     endif
+     
+     ! ... kinetic energy
+     if (mod(istep, nenergy)==0) then
+        uxh=ux
+        uyh=uy
+        uzh=uz
+
+        energy=0.5*sum(uxh**2+uyh**2+uzh**2)/nxnynz
+
+        open(unit=100, file="stat_te.dat", status="unknown", form="formatted", position="append")
+        write(100, "(I7,1X,F16.8,1X,1pe15.6)") istep, istep*dt, energy
+        close(100)
+     endif
+     
+     ! Compute vorticity in spectral space and transfer to physical space     
+     !$cuf kernel do(3) <<< (*,*), (32,4) >>>
+     do k=1,  nz
+        do j=1, ny
+           do i=1, nhp1
+              vortx_hat(i,j,k)=cmplx(0,1)*(ky(i,j,k)*uz_hat(i,j,k)-kz(i,j,k)*uy_hat(i,j,k))
+              vorty_hat(i,j,k)=cmplx(0,1)*(kz(i,j,k)*ux_hat(i,j,k)-kx(i,j,k)*uz_hat(i,j,k))
+              vortz_hat(i,j,k)=cmplx(0,1)*(kx(i,j,k)*uy_hat(i,j,k)-ky(i,j,k)*ux_hat(i,j,k))
+           enddo
+        enddo
+     enddo
+
+     status=cufftExecC2R(planinv, vortx_hat, vortx)
+     status=cufftExecC2R(planinv, vorty_hat, vorty)
+     status=cufftExecC2R(planinv, vortz_hat, vortz)
+
+     ! Compute u x \omega in physical space
+     
+     !$cuf kernel do(3) <<< (*,*), (32,4) >>>
+     do k=1, nz
+        do j=1, ny
+           do i=1, nx
+              velvortx(i, j, k) = uy(i,j,k)*vortz(i,j,k)-uz(i,j,k)*vorty(i,j,k)
+              velvorty(i, j, k) = uz(i,j,k)*vortx(i,j,k)-ux(i,j,k)*vortz(i,j,k)
+              velvortz(i, j, k) = ux(i,j,k)*vorty(i,j,k)-uy(i,j,k)*vortx(i,j,k)
+           enddo
+        enddo
+     enddo
+
+     status=cufftExecR2C(plan, velvortx, velvortx_hat)
+     status=cufftExecR2C(plan, velvorty, velvorty_hat)
+     status=cufftExecR2C(plan, velvortz, velvortz_hat)
+
+     !$cuf kernel do(3) <<< (*,*), (32,4) >>>
+     do k=1,  nz
+        do j=1, ny
+           do i=1, nhp1
+              velvortx_hat(i,j,k)=velvortx_hat(i,j,k)/nxnynz
+              velvorty_hat(i,j,k)=velvorty_hat(i,j,k)/nxnynz
+              velvortz_hat(i,j,k)=velvortz_hat(i,j,k)/nxnynz
+           enddo
+        enddo
+     enddo
+
+     ! Dealias modes     
+     !$cuf kernel do(3) <<< (*,*), (32,4) >>>
+     do k=1,  nz
+        do j=1, ny
+           do i=1, nhp1
+              if (ik2(i,j,k)>klimit) then
+                 velvortx_hat(i,j,k)=0
+                 velvorty_hat(i,j,k)=0
+                 velvortz_hat(i,j,k)=0
+              endif
+           enddo
+        enddo
+     enddo
+     
+     ! Compute RHS
+     !$cuf kernel do(3) <<< (*,*), (32,4) >>>
+     do k=1,  nz
+        do j=1, ny
+           do i=1, nhp1
+              rhsx(i,j,k)=velvortx_hat(i,j,k)- &
+                   visc*k2(i,j,k)*ux_hat(i,j,k)-&
+                   kx(i,j,k)*k2inv(i,j,k)*(&
+                   kx(i,j,k)*velvortx_hat(i,j,k)+ky(i,j,k)*velvorty_hat(i,j,k)+kz(i,j,k)*velvortz_hat(i,j,k) &
+                   )
+
+              rhsy(i,j,k)=velvorty_hat(i,j,k)-&
+                   visc*k2(i,j,k)*uy_hat(i,j,k)-&
+                   ky(i,j,k)*k2inv(i,j,k)*(&
+                   kx(i,j,k)*velvortx_hat(i,j,k)+ky(i,j,k)*velvorty_hat(i,j,k)+kz(i,j,k)*velvortz_hat(i,j,k) &
+                   )
+              rhsz(i,j,k)=velvortz_hat(i,j,k)-&
+                   visc*k2(i,j,k)*uz_hat(i,j,k)-&
+                   kz(i,j,k)*k2inv(i,j,k)*(&
+                   kx(i,j,k)*velvortx_hat(i,j,k)+ky(i,j,k)*velvorty_hat(i,j,k)+kz(i,j,k)*velvortz_hat(i,j,k) &
+                   )
+           enddo
+        enddo
+     enddo
+
+     ! ! Simple Euler scheme
+     ! !$cuf kernel do(3) <<< (*,*), (32,4) >>>
+     ! do k=1,  nz
+     !    do j=1, ny
+     !       do i=1, nhp1
+     !          ux_hat(i,j,k)=ux_hat(i,j,k)+dt*rhsx(i,j,k)
+     !          uy_hat(i,j,k)=uy_hat(i,j,k)+dt*rhsy(i,j,k)
+     !          uz_hat(i,j,k)=uz_hat(i,j,k)+dt*rhsz(i,j,k)
+     !       enddo
+     !    enddo
+     ! enddo
+
+     if (istep==1) then
+        rhsx0=velvortx_hat
+        rhsy0=velvorty_hat
+        rhsz0=velvortz_hat
+     endif
+
+     ! Adams-Bashforth scheme
+     !$cuf kernel do(3) <<< (*,*), (32,4) >>>
+     do k=1,  nz
+        do j=1, ny
+           do i=1, nhp1
+              ux_hat(i,j,k)=ux_hat(i,j,k)+0.5*dt*(3*rhsx(i,j,k)-rhsx0(i,j,k))
+              uy_hat(i,j,k)=uy_hat(i,j,k)+0.5*dt*(3*rhsy(i,j,k)-rhsy0(i,j,k))
+              uz_hat(i,j,k)=uz_hat(i,j,k)+0.5*dt*(3*rhsz(i,j,k)-rhsz0(i,j,k))
+           enddo
+        enddo
+     enddo
+
+     rhsx0=rhsx
+     rhsy0=rhsy
+     rhsz0=rhsz
+
+  enddo ! timestep
+
+  call cpu_time(end)
+  write(*,*) "It took", end-start
+endprogram main
+
+subroutine output_fstep(nx, ny, nz, fx, fy, fz, istep)
+  use iso_c_binding
+  implicit none
+  integer :: nx, ny, nz
+  integer :: istep
+  real(c_float), dimension(nx, ny, nz) :: fx, fy, fz
+  integer :: i, j, k
+  real :: dx, dy, dz
+  real :: pi
+  character(len=16) :: filename
+    
+  pi=4.0*atan(1.0)
+  dx=pi*2/nx
+  dy=dx
+  dz=dx
+
+  ! Z plane
+  write(filename, "('s2Z',i9.9,'.tec')") istep
+  open(unit=100, file=filename, status="replace")
+
+  write(100, *) 'TITLE = "Example: Simple 3D-Volume Data"'
+  write(100, *) 'VARIABLES = "X", "Y", "Z", "U", "V", "W"'
+  write(100, "('ZONE I=',i4,1x,', J=',i4,1x,', K=',i4,1x,'F=POINT')") nx, ny, 1
+
+  k=nz/2
+  do j=1,ny
+     do i=1,nx
+        write(100, "(3(f10.5,2x),3(1pe15.7,2x))") &
+             (i-0.5)*dx, (j-0.5)*dy, (k-0.5)*dz, &
+             fx(i,j,k), fy(i,j,k), fz(i,j,k)
+     enddo
+  enddo
+  close(100)
+
+  ! Y plane
+  write(filename, "('s2Y',i9.9,'.tec')") istep
+  open(unit=100, file=filename, status="replace")
+
+  write(100, *) 'TITLE = "Example: Simple 3D-Volume Data"'
+  write(100, *) 'VARIABLES = "X", "Y", "Z", "U", "V", "W"'
+  write(100, "('ZONE I=',i4,1x,', J=',i4,1x,', K=',i4,1x,'F=POINT')") nx, 1, nz
+
+  j=ny/2
+  do k=1, nz
+     do i=1,nx
+        write(100, "(3(f10.5,2x),3(1pe15.7,2x))") &
+             (i-0.5)*dx, (j-0.5)*dy, (k-0.5)*dz, &
+             fx(i,j,k), fy(i,j,k), fz(i,j,k)
+     enddo
+  enddo
+  close(100)
+
+  ! X plane
+  write(filename, "('s2X',i9.9,'.tec')") istep
+  open(unit=100, file=filename, status="replace")
+
+  write(100, *) 'TITLE = "Example: Simple 3D-Volume Data"'
+  write(100, *) 'VARIABLES = "X", "Y", "Z", "U", "V", "W"'
+  write(100, "('ZONE I=',i4,1x,', J=',i4,1x,', K=',i4,1x,'F=POINT')") 1, ny, nz
+
+  i=nx/2
+  do k=1,nz
+     do j=1,ny
+        write(100, "(3(f10.5,2x),3(1pe15.7,2x))") &
+             (i-0.5)*dx, (j-0.5)*dy, (k-0.5)*dz, &
+             fx(i,j,k), fy(i,j,k), fz(i,j,k)
+     enddo
+  enddo
+  close(100)
+
+  ! Uncomment to save whole 3D arrays in TECPLOT ASCII format
+  ! write(filename, "('sim',i9.9,'.tec')") istep
+  ! open(unit=100, file=filename, status="replace")
+
+  ! write(100, *) 'TITLE = "Example: Simple 3D-Volume Data"'
+  ! write(100, *) 'VARIABLES = "X", "Y", "Z", "U", "V", "W"'
+  ! write(100, "('ZONE I=',i4,1x,', J=',i4,1x,', K=',i4,1x,'F=POINT')") nx, ny, nz
+
+  ! do k=1,nx
+  !    do j=1,ny
+  !       do i=1,nz
+  !          write(100, "(3(f10.5,2x),3(1pe15.7,2x))") &
+  !               (i-0.5)*dx, (j-0.5)*dy, (k-0.5)*dz, &
+  !               fx(i,j,k), fy(i,j,k), fz(i,j,k)
+  !       enddo
+  !    enddo
+  ! enddo
+  ! close(100)
+endsubroutine output_fstep
+
+! Binary dump
+subroutine dump_fstep(nx, ny, nz, fx, fy, fz, istep)
+  use iso_c_binding
+  implicit none
+  integer :: nx, ny, nz
+  integer :: istep
+  real(c_float), dimension(nx, ny, nz) :: fx, fy, fz
+  integer :: i, j, k
+  real :: dx, dy, dz
+  real :: pi
+  character(len=16) :: filename
+    
+  write(filename, "('uuu',i9.9,'.dat')") istep
+  open(unit=100, file=filename, status="replace", access="stream")
+  write(100) fx
+  close(100)
+
+  write(filename, "('vvv',i9.9,'.dat')") istep
+  open(unit=100, file=filename, status="replace", access="stream")
+  write(100) fy
+  close(100)
+
+  write(filename, "('www',i9.9,'.dat')") istep
+  open(unit=100, file=filename, status="replace", access="stream")
+  write(100) fz
+  close(100)
+endsubroutine dump_fstep

@@ -1,0 +1,94 @@
+! This program is free software: you can redistribute it and/or modify it under the
+! terms of the GNU General Public License as published by the Free Software
+! Foundation, either version 3 of the License, or (at your option) any later version.
+!
+! This program is distributed in the hope that it will be useful, but WITHOUT ANY
+! WARRANTY; without even the implied warranty of MERCHANTABILITY or
+! FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+! more details.
+!
+! You should have received a copy of the GNU General Public License along with
+! this program. If not, see <https://www.gnu.org/licenses/>. 
+module cufft
+  use iso_c_binding
+
+  integer, parameter :: nx=64, ny=nx, nz=nx
+  
+  ! CUFFT Status
+  enum, bind(C)
+     enumerator :: CUFFT_SUCCESS        = 0
+     enumerator :: CUFFT_INVALID_PLAN   = 1
+     enumerator :: CUFFT_ALLOC_FAILED   = 2
+     enumerator :: CUFFT_INVALID_TYPE   = 3
+     enumerator :: CUFFT_INVALID_VALUE  = 4
+     enumerator :: CUFFT_INTERNAL_ERROR = 5
+     enumerator :: CUFFT_EXEC_FAILED    = 6
+     enumerator :: CUFFT_SETUP_FAILED   = 7
+     enumerator :: CUFFT_INVALID_SIZE   = 8
+     enumerator :: CUFFT_UNALIGNED_DATA = 9
+  endenum
+
+  ! CUFFT Transform Types
+  integer, parameter :: CUFFT_R2C = z'2a' ! Real to Complex (interleaved)
+  integer, parameter :: CUFFT_C2R = z'2c' ! Complex (interleaved) to Real
+  integer, parameter :: CUFFT_C2C = z'29' ! Complex to Complex, interleaved
+  integer, parameter :: CUFFT_D2Z = z'6a' ! Double to Double-Complex
+  integer, parameter :: CUFFT_Z2D = z'6c' ! Double-Complex to Double
+  integer, parameter :: CUFFT_Z2Z = z'69' ! Double-Complex to Double-Complex
+  
+  ! CUFFT Data Layouts
+  enum, bind(C)
+     enumerator :: CUFFT_COMPATIBILITY_NATIVE          = 0
+     enumerator :: CUFFT_COMPATIBILITY_FFTW_PADDING    = 1
+     enumerator :: CUFFT_COMPATIBILITY_FFTW_ASYMMETRIC = 2
+     enumerator :: CUFFT_COMPATIBILITY_FFTW_ALL        = 3
+  endenum
+
+  interface cufftPlan3d
+     integer(c_int) function cufftPlan3d(plan, nx, ny, nz, type) bind(C, name='cufftPlan3d')
+       use iso_c_binding
+       integer(c_int) :: plan
+       integer(c_int), value :: nx, ny, nz
+       integer(c_int), value :: type
+     endfunction cufftPlan3d
+  endinterface cufftPlan3d
+
+  ! Single precision
+  interface cufftExecR2C
+     integer(c_int) function cufftExecR2C(plan, idata, odata) bind(C, name='cufftExecR2C')
+       use iso_c_binding
+       integer(c_int), value :: plan
+       real(C_FLOAT), device :: idata(*)
+       complex(C_FLOAT_COMPLEX), device :: odata(*)
+     endfunction cufftExecR2C
+  endinterface cufftExecR2C
+
+  interface cufftExecC2R
+     integer(c_int) function cufftExecC2R(plan, idata, odata) bind(C, name='cufftExecC2R')
+       use iso_c_binding
+       integer(c_int), value :: plan
+       real(C_FLOAT), device :: odata(*)
+       complex(C_FLOAT_COMPLEX), device :: idata(*)
+     endfunction cufftExecC2R
+  endinterface cufftExecC2R
+
+  ! Double precision
+  interface cufftExecD2Z
+     integer(c_int) function cufftExecD2Z(plan, idata, odata) bind(C, name='cufftExecD2Z')
+       use iso_c_binding
+       integer(c_int), value :: plan
+       real(C_double), device :: idata(*)
+       complex(C_double_COMPLEX), device :: odata(*)
+     endfunction cufftExecD2Z
+  endinterface cufftExecD2Z
+
+  interface cufftExecZ2D
+     integer(c_int) function cufftExecZ2D(plan, idata, odata) bind(C, name='cufftExecZ2D')
+       use iso_c_binding
+       integer(c_int), value :: plan
+       real(C_double), device :: odata(*)
+       complex(C_double_COMPLEX), device :: idata(*)
+     endfunction cufftExecZ2D
+  endinterface cufftExecZ2D
+  
+endmodule cufft
