@@ -50,4 +50,13 @@ Simulation is started explicitly using binary executable:
 python3 ./process.py -n 64 -s 100 -e 2000 -i 25 -m 1 1 1
 ```
 This script should be invoked from the directory which contains `uuu*` `vvv*` `www*` files. In previous example it is explicitly defined that
-mesh resolution is `64`, output is started at timestep `100` and ends at `2000`, output frequency is `25`. More parameters can be found by investigating the script source.
+mesh resolution is `64`, output is started at timestep `100` (-s 100) and ends at `2000` (-e 2000), output frequency is `25` (-i 25). Such **start**, **end** and **frequency** parameters assume that output contains following files:
+```
+uuu0000100.dat
+uuu0000125.dat
+uuu0000150.dat
+...
+uuu0002000.dat
+```
+
+More parameters can be found by investigating the script source.
