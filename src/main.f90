@@ -23,7 +23,9 @@ program main
   integer, parameter :: nhp1=n/2+1
   integer, parameter :: ncube=n**3
   
-  ! Processor grid configuration
+  ! Processor grid configuration also known as cartesian MPI topology.
+  ! Example parameters p_row=2, p_col=2 correspond to 2D domain
+  ! decomposition with 4 total subdomains and 4 CPU cores.
   integer, parameter :: p_row=2, p_col=2
   
   integer :: ierr
@@ -41,9 +43,12 @@ program main
   complex(C_DOUBLE_COMPLEX), allocatable, dimension(:, :, :) :: vortx_hat, vorty_hat, vortz_hat
   complex(C_DOUBLE_COMPLEX), allocatable, dimension(:, :, :) :: velvortx_hat, velvorty_hat, velvortz_hat
   complex(C_DOUBLE_COMPLEX), allocatable, dimension(:, :, :) :: rhsx, rhsy, rhsz, rhsx0, rhsy0, rhsz0
+
+  ! Wavenumber related arrays
   real(8), allocatable, dimension(:, :, :) :: kx, ky, kz, k2, k2inv, kabs, ksqr
   integer, allocatable, dimension(:, :, :) :: ik2
-  
+
+  ! Define start/end indicies
   integer, dimension(3) :: fft_start, fft_end, fft_size
 
   real(8), parameter :: pi=3.1415927410125732, pi2=2*pi
@@ -60,13 +65,16 @@ program main
   integer, parameter :: ndump=50
   ! Output to ASCII files every ... steps
   integer, parameter :: noutput=50
-  ! \Delta t
+  ! \Delta t aka timestep
   real(8), parameter :: dt=0.005
 
+  ! Spectral truncation limit
   real(8) :: klimit=n/3.
+  
   integer :: i, j, k
   real :: start, finish
-  
+
+  ! Initialize MPI and 2decompFFT library
   call MPI_Init(ierr)
   call decomp_2d_init(nx,ny,nz,p_row,p_col)
   call decomp_2d_fft_init
@@ -91,15 +99,6 @@ program main
   call alloc_x(velvortz, opt_global=.true.)
   
   call decomp_2d_fft_get_size(fft_start,fft_end,fft_size)
-
-  if (nrank==1) then
-     print *, xstart(1), xend(1)
-     print *, xstart(2), xend(2)
-     print *, xstart(3), xend(3)
-     print *, fft_start(1),fft_end(1)
-     print *, fft_start(2),fft_end(2)
-     print *, fft_start(3),fft_end(3)
-  endif
  
   ! ux_hat
   allocate (ux_hat( &
@@ -184,7 +183,6 @@ program main
        fft_start(2):fft_end(2), &
        fft_start(3):fft_end(3)))
 
-  ! kx
   allocate (kx( &
        fft_start(1):fft_end(1), &
        fft_start(2):fft_end(2), &
@@ -256,7 +254,7 @@ program main
   
   ik2 = int ( sqrt(k2) + 0.5 )
     
-  ! Initialize velocity field
+  ! Initialize velocity field according to the Taylor-Green Vortex case
   do k=xstart(3), xend(3)
      do j=xstart(2), xend(2)
         do i=xstart(1), xend(1)
@@ -310,7 +308,8 @@ program main
      call decomp_2d_fft_3d(vorty_hat, vorty)
      call decomp_2d_fft_3d(vortz_hat, vortz)
      
-     ! Compute u x \omega in physical space
+     ! Compute u x \omega (cross product of velocity and vorticity vectors)
+     ! in physical space
      do k=xstart(3), xend(3)
         do j=xstart(2), xend(2)
            do i=xstart(1), xend(1)
@@ -321,6 +320,7 @@ program main
         enddo
      enddo
 
+     ! Transfer u x \omega to spectral space
      call decomp_2d_fft_3d(velvortx, velvortx_hat)
      call decomp_2d_fft_3d(velvorty, velvorty_hat)
      call decomp_2d_fft_3d(velvortz, velvortz_hat)
@@ -341,6 +341,7 @@ program main
         rhsz0=velvortz_hat
      endif
 
+     ! Adams-Bashforth timestepping
      ux_hat=ux_hat*(1-0.5*visc*dt*k2)+3./2.*dt*velvortx_hat-1./2.*dt*rhsx0
      uy_hat=uy_hat*(1-0.5*visc*dt*k2)+3./2.*dt*velvorty_hat-1./2.*dt*rhsy0
      uz_hat=uz_hat*(1-0.5*visc*dt*k2)+3./2.*dt*velvortz_hat-1./2.*dt*rhsz0
@@ -364,7 +365,8 @@ program main
      rhsx0=velvortx_hat
      rhsy0=velvorty_hat
      rhsz0=velvortz_hat
-        
+
+     ! Save velocity to binary files
      if (mod(istep, ndump)==0) then
         write(filename, "('uuu',i9.9,'.dat')") istep
         call decomp_2d_write_one(1, ux, filename)
@@ -373,8 +375,34 @@ program main
         write(filename, "('www',i9.9,'.dat')") istep
         call decomp_2d_write_one(1, uz, filename)
      endif
+
+     ! Output to 2D/3D ASCII Tecplot files
      if (mod(istep, noutput)==0) then
-        call output_fstep(nx, ny, nz, ux, uy, uz, istep)
+        uxg=0
+        uyg=0
+        uzg=0
+        do k=xstart(3), xend(3)
+           do j=xstart(2), xend(2)
+              do i=xstart(1), xend(1)
+                 uxg(i,j,k) = ux(i,j,k)
+                 uyg(i,j,k) = uy(i,j,k)
+                 uzg(i,j,k) = uz(i,j,k)
+              enddo
+           enddo
+        enddo
+
+        call MPI_Barrier(MPI_COMM_WORLD)
+
+        if (nrank==0) then
+           call MPI_Reduce(MPI_IN_PLACE, uxg, nxnynz, MPI_REAL8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+           call MPI_Reduce(MPI_IN_PLACE, uyg, nxnynz, MPI_REAL8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+           call MPI_Reduce(MPI_IN_PLACE, uzg, nxnynz, MPI_REAL8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+        else     
+           call MPI_Reduce(uxg, uxg, nxnynz, MPI_REAL8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+           call MPI_Reduce(uyg, uyg, nxnynz, MPI_REAL8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+           call MPI_Reduce(uzg, uzg, nxnynz, MPI_REAL8, MPI_SUM, 0, MPI_COMM_WORLD, ierr)
+        endif
+        call output_fstep(nx, ny, nz, uxg, uyg, uzg, istep)
      endif
   enddo ! timeloop
 
